@@ -29,6 +29,15 @@ ModelPath := 'D:/halcon/HALCON-24.11-Progress-Steady/dl/'
 DetModel := ModelPath + 'pretrained_deep_ocr_detection_compact.hdl'
 RecModel := ModelPath + 'pretrained_deep_ocr_recognition.hdl'
 
+file_exists (DetModel, DetExists)
+file_exists (RecModel, RecExists)
+if (not DetExists or not RecExists)
+    dev_disp_text ('错误：模型文件不存在。', 'window', 'center', 'center', 'red', [], [])
+    dev_disp_text ('Det: ' + DetModel, 'window', 60, 10, 'red', [], [])
+    dev_disp_text ('Rec: ' + RecModel, 'window', 90, 10, 'red', [], [])
+    stop ()
+endif
+
 try
     query_available_dl_devices (['type'], ['gpu'], GPUHandles)
     DLDevice := GPUHandles[0]
@@ -44,16 +53,23 @@ try
     set_deep_ocr_param (DeepOcrHandle, 'detection_min_character_score', 0.6)
     * 可选：设置最小字符数，过滤掉单字符
     set_deep_ocr_param (DeepOcrHandle, 'detection_min_num_characters', 3)
+    ModelLoaded := true
 catch (Exception)
     dev_disp_text ('错误：未找到 Deep OCR 模型文件。', 'window', 'center', 'center', 'red', [], [])
+    ModelLoaded := false
     stop ()
 endtry
 
 * 4. 执行推理 (Inference)
-count_seconds (T1)
-apply_deep_ocr (Image, DeepOcrHandle, 'auto', DeepOcrResult)
-count_seconds (T2)
-TimeCost := (T2 - T1) * 1000
+if (ModelLoaded)
+    count_seconds (T1)
+    apply_deep_ocr (Image, DeepOcrHandle, 'auto', DeepOcrResult)
+    count_seconds (T2)
+    TimeCost := (T2 - T1) * 1000
+else
+    dev_disp_text ('模型未加载成功，无法识别。', 'window', 'center', 'center', 'red', [], [])
+    stop ()
+endif
 
 * 5. 结果解析
 try
