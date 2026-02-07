@@ -47,7 +47,8 @@ catch (Exception)
 endtry
 
 try
-    create_deep_ocr (DetModel, RecModel, DeepOcrHandle)
+    * 修正：create_deep_ocr 第一个参数是模型文件列表，第二个参数是模式('auto')
+    create_deep_ocr ([DetModel, RecModel], 'auto', DeepOcrHandle)
     set_deep_ocr_param (DeepOcrHandle, 'device', DLDevice)
     * 提高最小字符分数，减少误识别
     set_deep_ocr_param (DeepOcrHandle, 'detection_min_character_score', 0.6)
@@ -55,7 +56,12 @@ try
     set_deep_ocr_param (DeepOcrHandle, 'detection_min_num_characters', 3)
     ModelLoaded := true
 catch (Exception)
-    dev_disp_text ('错误：未找到 Deep OCR 模型文件。', 'window', 'center', 'center', 'red', [], [])
+    get_system ('version', HalconVersion)
+    Error := '错误代码: ' + Exception[0] + '\n描述: ' + Exception[1]
+    dev_disp_text ('模型加载失败！\n' + Error, 'window', 'center', 'center', 'red', [], [])
+    dev_disp_text ('HALCON版本: ' + HalconVersion, 'window', 60, 10, 'red', [], [])
+    dev_disp_text ('Det: ' + DetModel, 'window', 90, 10, 'red', [], [])
+    dev_disp_text ('Rec: ' + RecModel, 'window', 120, 10, 'red', [], [])
     ModelLoaded := false
     stop ()
 endtry
