@@ -1,0 +1,73 @@
+* 1. 窗口清理
+dev_close_window ()
+ImagePath := 'E:/mvtec_test/Snipaste_2026-02-04_15-00-02.png'
+file_exists (ImagePath, ImageExists)
+if (ImageExists)
+    read_image (Image, ImagePath)
+    get_image_size (Image, ImageWidth, ImageHeight)
+    dev_open_window_fit_size (0, 0, ImageWidth, ImageHeight, -1, -1, WindowHandle)
+    dev_display (Image)
+else
+    dev_open_window (0, 0, 1280, 720, 'black', WindowHandle)
+endif
+
+* 2. 定义模型路径（用户指定）
+ModelPath := 'D:/halcon/HALCON-24.11-Progress-Steady/dl/'
+
+DetModel := ModelPath + 'pretrained_deep_ocr_detection_compact.hdl'
+RecModel := ModelPath + 'pretrained_deep_ocr_recognition.hdl'
+
+* 3. 强制设备检测
+try
+    query_available_dl_devices (['type'], ['gpu'], GPUHandles)
+    DLDevice := GPUHandles[0]
+catch (Exception)
+    query_available_dl_devices (['type'], ['cpu'], CPUHandles)
+    DLDevice := CPUHandles[0]
+endtry
+
+ModelLoaded := false
+
+* 4. 尝试加载模型
+try
+    * 24.11 必须匹配 24.11 模型，否则此处必报 21000
+    create_deep_ocr (DetModel, RecModel, DeepOcrHandle)
+    set_deep_ocr_param (DeepOcrHandle, 'device', DLDevice)
+    dev_disp_text ('[成功] 模型加载完成！', 'window', 'center', 'center', 'green', [], [])
+    ModelLoaded := true
+catch (Exception)
+    * 如果报错，打印具体的异常描述
+    Error := '错误代码: ' + Exception[0] + '\n描述: ' + Exception[1]
+    dev_disp_text ('加载失败！诊断信息：\n' + Error, 'window', 'center', 'center', 'red', [], [])
+    dev_disp_text ('\n[原因分析]：21000 代表模型文件版本太旧。', 'window', 400, 10, 'white', [], [])
+    stop ()
+endtry
+
+* 5. 简单的图像识别测试
+if (ModelLoaded)
+    if (ImageExists)
+        apply_deep_ocr (Image, DeepOcrHandle, 'auto', DeepOcrResult)
+        get_dict_tuple (DeepOcrResult, 'words', Words)
+        dev_display (Image)
+        dev_set_color ('green')
+        dev_set_line_width (2)
+        for i := 0 to |Words| - 1 by 1
+            get_dict_tuple (Words[i], 'word', Text)
+            get_dict_tuple (Words[i], 'bbox', BBox)
+            get_dict_tuple (BBox, 'row', Row)
+            get_dict_tuple (BBox, 'col', Col)
+            get_dict_tuple (BBox, 'length1', Length1)
+            get_dict_tuple (BBox, 'length2', Length2)
+            get_dict_tuple (BBox, 'phi', Phi)
+            gen_rectangle2 (Rect, Row, Col, Phi, Length1, Length2)
+            dev_display (Rect)
+            dev_disp_text (Text, 'window', Row, Col, 'green', [], [])
+        endfor
+    else
+        dev_disp_text ('图片不存在：' + ImagePath, 'window', 'center', 'center', 'red', [], [])
+        stop ()
+    endif
+else
+    dev_disp_text ('模型未加载成功，无法识别。', 'window', 'center', 'center', 'red', [], [])
+    stop ()
+endif
