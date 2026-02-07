@@ -1,23 +1,34 @@
-* 1. 窗口清理
+* ============================================================
+* 项目名称：变压器顶部字符检测 (P301067 & P100740P)
+* 修复版本：过滤三角形符号 + 修正结果判定
+* ============================================================
+
+* 1. 系统初始化
+dev_update_off ()
 dev_close_window ()
+dev_open_window (0, 0, 1280, 720, 'black', WindowHandle)
+set_display_font (WindowHandle, 16, 'mono', 'true', 'false')
+
+* 2. 读取图像
 ImagePath := 'E:/mvtec_test/Snipaste_2026-02-04_15-00-02.png'
-file_exists (ImagePath, ImageExists)
-if (ImageExists)
+try
     read_image (Image, ImagePath)
-    get_image_size (Image, ImageWidth, ImageHeight)
-    dev_open_window_fit_size (0, 0, ImageWidth, ImageHeight, -1, -1, WindowHandle)
-    dev_display (Image)
-else
-    dev_open_window (0, 0, 1280, 720, 'black', WindowHandle)
-endif
+catch (Exception)
+    dev_disp_text ('错误：找不到图片，请检查路径！', 'window', 'center', 'center', 'red', [], [])
+    stop ()
+endtry
 
-* 2. 定义模型路径（用户指定）
+get_image_size (Image, ImageWidth, ImageHeight)
+dev_close_window ()
+dev_open_window_fit_size (0, 0, ImageWidth, ImageHeight, -1, -1, WindowHandle)
+dev_display (Image)
+dev_disp_text ('正在加载 Deep OCR 模型...', 'window', 10, 10, 'black', [], [])
+
+* 3. 创建并配置 Deep OCR 模型
 ModelPath := 'D:/halcon/HALCON-24.11-Progress-Steady/dl/'
-
 DetModel := ModelPath + 'pretrained_deep_ocr_detection_compact.hdl'
 RecModel := ModelPath + 'pretrained_deep_ocr_recognition.hdl'
 
-* 3. 强制设备检测
 try
     query_available_dl_devices (['type'], ['gpu'], GPUHandles)
     DLDevice := GPUHandles[0]
@@ -26,48 +37,159 @@ catch (Exception)
     DLDevice := CPUHandles[0]
 endtry
 
-ModelLoaded := false
-
-* 4. 尝试加载模型
 try
-    * 24.11 必须匹配 24.11 模型，否则此处必报 21000
     create_deep_ocr (DetModel, RecModel, DeepOcrHandle)
     set_deep_ocr_param (DeepOcrHandle, 'device', DLDevice)
-    dev_disp_text ('[成功] 模型加载完成！', 'window', 'center', 'center', 'green', [], [])
-    ModelLoaded := true
+    * 提高最小字符分数，减少误识别
+    set_deep_ocr_param (DeepOcrHandle, 'detection_min_character_score', 0.6)
+    * 可选：设置最小字符数，过滤掉单字符
+    set_deep_ocr_param (DeepOcrHandle, 'detection_min_num_characters', 3)
 catch (Exception)
-    * 如果报错，打印具体的异常描述
-    Error := '错误代码: ' + Exception[0] + '\n描述: ' + Exception[1]
-    dev_disp_text ('加载失败！诊断信息：\n' + Error, 'window', 'center', 'center', 'red', [], [])
-    dev_disp_text ('\n[原因分析]：21000 代表模型文件版本太旧。', 'window', 400, 10, 'white', [], [])
+    dev_disp_text ('错误：未找到 Deep OCR 模型文件。', 'window', 'center', 'center', 'red', [], [])
     stop ()
 endtry
 
-* 5. 简单的图像识别测试
-if (ModelLoaded)
-    if (ImageExists)
-        apply_deep_ocr (Image, DeepOcrHandle, 'auto', DeepOcrResult)
-        get_dict_tuple (DeepOcrResult, 'words', Words)
-        dev_display (Image)
-        dev_set_color ('green')
-        dev_set_line_width (2)
-        for i := 0 to |Words| - 1 by 1
-            get_dict_tuple (Words[i], 'word', Text)
-            get_dict_tuple (Words[i], 'bbox', BBox)
-            get_dict_tuple (BBox, 'row', Row)
-            get_dict_tuple (BBox, 'col', Col)
-            get_dict_tuple (BBox, 'length1', Length1)
-            get_dict_tuple (BBox, 'length2', Length2)
-            get_dict_tuple (BBox, 'phi', Phi)
-            gen_rectangle2 (Rect, Row, Col, Phi, Length1, Length2)
-            dev_display (Rect)
-            dev_disp_text (Text, 'window', Row, Col, 'green', [], [])
+* 4. 执行推理 (Inference)
+count_seconds (T1)
+apply_deep_ocr (Image, DeepOcrHandle, 'auto', DeepOcrResult)
+count_seconds (T2)
+TimeCost := (T2 - T1) * 1000
+
+* 5. 结果解析
+try
+    get_dict_tuple (DeepOcrResult, 'words', Words)
+catch (Exception)
+    Words := []
+endtry
+
+* ============================================================
+* 核心处理逻辑：白名单过滤 + 符号黑名单
+* ============================================================
+
+* 定义目标字符串
+RequiredStrings := ['EPCOS', 'A2396', '25075T']
+FoundStatus := [0, 0, 0]
+
+* 定义需要忽略的黑名单（三角形可能被识别成的字符）
+BlackList := ['L', 'A', 'V', '△', '▲', '^']
+
+dev_display (Image)
+
+* 显示行计数器（只计算有效显示的行）
+DisplayRow := 0
+
+* 遍历识别结果
+if (|Words| > 0)
+    for i := 0 to |Words| - 1 by 1
+        WordHandle := Words[i]
+
+        * 【步骤A】从句柄提取文本字符串
+        try
+            get_dict_tuple (WordHandle, 'word', RawText)
+            tuple_string (RawText, 's', StrText)
+        catch (Exception)
+            continue
+        endtry
+
+        * 【步骤B】获取字符串长度
+        tuple_strlen (StrText, Len)
+
+        * 【步骤C】黑名单过滤：如果完全匹配黑名单中的项，直接跳过
+        IsBlacklisted := false
+        for b := 0 to |BlackList| - 1 by 1
+            if (StrText == BlackList[b])
+                IsBlacklisted := true
+                break
+            endif
         endfor
-    else
-        dev_disp_text ('图片不存在：' + ImagePath, 'window', 'center', 'center', 'red', [], [])
-        stop ()
-    endif
-else
-    dev_disp_text ('模型未加载成功，无法识别。', 'window', 'center', 'center', 'red', [], [])
-    stop ()
+
+        if (IsBlacklisted == true)
+            continue
+        endif
+
+        * 【步骤D】长度过滤：长度小于3的直接跳过（保险措施）
+        if (Len < 3)
+            continue
+        endif
+
+        * 【步骤E】白名单匹配逻辑
+        IsTarget := false
+        MatchedIndex := -1
+
+        for j := 0 to |RequiredStrings| - 1 by 1
+            Target := RequiredStrings[j]
+
+            * 包含匹配：StrText 包含 Target 即算匹配
+            tuple_strstr (StrText, Target, Position)
+
+            if (Position != -1)
+                IsTarget := true
+                MatchedIndex := j
+                FoundStatus[j] := 1
+                break
+            endif
+        endfor
+
+        * 【步骤F】显示结果
+        if (IsTarget == true)
+            * 目标字符 -> 绿色显示
+            dev_disp_text (StrText + ' [OK]', 'window', 100 + DisplayRow*30, 10, 'green', [], [])
+
+            * 画绿色框
+            try
+                get_dict_tuple (WordHandle, 'bbox', Box)
+                get_dict_tuple (Box, 'row', Row)
+                get_dict_tuple (Box, 'col', Col)
+                get_dict_tuple (Box, 'length1', Length1)
+                get_dict_tuple (Box, 'length2', Length2)
+                get_dict_tuple (Box, 'phi', Phi)
+                gen_rectangle2 (Rect, Row, Col, Phi, Length1, Length2)
+                dev_set_color ('green')
+                dev_set_draw ('margin')
+                dev_set_line_width (2)
+                dev_display (Rect)
+            catch (Exception)
+            endtry
+
+            DisplayRow := DisplayRow + 1
+        else
+            * 非目标字符（且通过了黑名单和长度过滤）-> 灰色显示
+            dev_disp_text (StrText + ' [未知]', 'window', 100 + DisplayRow*30, 10, 'gray', [], [])
+            DisplayRow := DisplayRow + 1
+        endif
+    endfor
 endif
+
+* ============================================================
+* 最终综合判定
+* ============================================================
+tuple_sum (FoundStatus, TotalFound)
+
+if (TotalFound == 3)
+    * 3个目标全部找到 -> OK (良品)
+    ResultMsg := '检测结果: OK'
+    ResultColor := 'green'
+else
+    * 有缺失 -> NG
+    ResultMsg := '检测结果: NG'
+    MissingList := ''
+    for k := 0 to 2 by 1
+        if (FoundStatus[k] == 0)
+            MissingList := MissingList + ' ' + RequiredStrings[k]
+        endif
+    endfor
+    if (strlen(MissingList) > 0)
+        ResultMsg := ResultMsg + ' (缺失:' + MissingList + ')'
+    endif
+    ResultColor := 'red'
+endif
+
+* 显示最终结果 - 放在最上方醒目位置
+dev_disp_text (ResultMsg, 'window', 10, 10, ResultColor, ['box', 'box_color'], ['true', ResultColor])
+dev_disp_text ('耗时: ' + TimeCost$'.2f' + ' ms', 'window', 40, 10, 'blue', [], [])
+
+* 显示识别到的内容标题
+dev_disp_text ('识别到的内容: ' + StrText, 'window', 70, 10, 'black', [], [])
+
+* 释放资源
+* clear_deep_ocr (DeepOcrHandle)
